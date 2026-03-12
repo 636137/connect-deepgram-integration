@@ -1,0 +1,55 @@
+{
+  "Version": "2019-10-30",
+  "StartAction": "start-logging",
+  "Metadata": {
+    "entryPointPosition": {"x": 40, "y": 40},
+    "ActionMetadata": {
+      "start-logging": {"position": {"x": 51, "y": 146}},
+      "set-deepgram-voice": {
+        "position": {"x": 322, "y": 119},
+        "parameters": {"TextToSpeechEngine": {"voiceProvider": "deepgram"}},
+        "overrideConsoleVoice": true
+      },
+      "play-welcome": {"position": {"x": 604, "y": 117}},
+      "disconnect": {"position": {"x": 917, "y": 439}}
+    }
+  },
+  "Actions": [
+    {
+      "Parameters": {"FlowLoggingBehavior": "Enabled"},
+      "Identifier": "start-logging",
+      "Type": "UpdateFlowLoggingBehavior",
+      "Transitions": {"NextAction": "set-deepgram-voice"}
+    },
+    {
+      "Parameters": {
+        "TextToSpeechEngine": "deepgram:{{TTS_MODEL}}",
+        "TextToSpeechVoice": "{{TTS_VOICE}}",
+        "ExternalCredentialSecretARN": "{{SECRET_ARN}}"
+      },
+      "Identifier": "set-deepgram-voice",
+      "Type": "UpdateContactTextToSpeechVoice",
+      "Transitions": {
+        "NextAction": "play-welcome",
+        "Errors": [{"NextAction": "disconnect", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Parameters": {
+        "Text": "{{PROMPT_TEXT}}"
+      },
+      "Identifier": "play-welcome",
+      "Type": "MessageParticipant",
+      "Transitions": {
+        "NextAction": "disconnect",
+        "Errors": [{"NextAction": "disconnect", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Parameters": {},
+      "Identifier": "disconnect",
+      "Type": "DisconnectParticipant",
+      "Transitions": {}
+    }
+  ]
+}

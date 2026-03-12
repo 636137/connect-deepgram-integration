@@ -1,0 +1,141 @@
+{
+  "Version": "2019-10-30",
+  "StartAction": "start-logging",
+  "Metadata": {
+    "entryPointPosition": {"x": 40, "y": 40},
+    "ActionMetadata": {
+      "start-logging": {"position": {"x": 40, "y": 120}},
+      "set-deepgram-voice": {
+        "position": {"x": 280, "y": 120},
+        "parameters": {"TextToSpeechEngine": {"voiceProvider": "deepgram"}},
+        "overrideConsoleVoice": true
+      },
+      "play-menu": {"position": {"x": 520, "y": 120}},
+      "get-input": {"position": {"x": 760, "y": 120}},
+      "check-input": {"position": {"x": 1000, "y": 120}},
+      "play-sales": {"position": {"x": 1000, "y": 300}},
+      "play-support": {"position": {"x": 1000, "y": 480}},
+      "play-billing": {"position": {"x": 1000, "y": 660}},
+      "transfer-queue": {"position": {"x": 1240, "y": 400}},
+      "play-invalid": {"position": {"x": 1240, "y": 120}},
+      "disconnect": {"position": {"x": 1480, "y": 400}}
+    }
+  },
+  "Actions": [
+    {
+      "Parameters": {"FlowLoggingBehavior": "Enabled"},
+      "Identifier": "start-logging",
+      "Type": "UpdateFlowLoggingBehavior",
+      "Transitions": {"NextAction": "set-deepgram-voice"}
+    },
+    {
+      "Parameters": {
+        "TextToSpeechEngine": "deepgram:{{TTS_MODEL}}",
+        "TextToSpeechVoice": "{{TTS_VOICE}}",
+        "ExternalCredentialSecretARN": "{{SECRET_ARN}}"
+      },
+      "Identifier": "set-deepgram-voice",
+      "Type": "UpdateContactTextToSpeechVoice",
+      "Transitions": {
+        "NextAction": "play-menu",
+        "Errors": [{"NextAction": "disconnect", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Parameters": {
+        "Text": "Welcome to our company. For sales, say sales or press 1. For technical support, say support or press 2. For billing questions, say billing or press 3."
+      },
+      "Identifier": "play-menu",
+      "Type": "MessageParticipant",
+      "Transitions": {
+        "NextAction": "get-input",
+        "Errors": [{"NextAction": "disconnect", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Parameters": {
+        "StoreInput": "True",
+        "InputTimeLimitSeconds": "5",
+        "DTMFInputAllowed": "True",
+        "SpeechRecognitionAllowed": "True",
+        "EncryptEntry": "False"
+      },
+      "Identifier": "get-input",
+      "Type": "GetParticipantInput",
+      "Transitions": {
+        "NextAction": "check-input",
+        "Errors": [
+          {"NextAction": "play-invalid", "ErrorType": "InputTimeLimitExceeded"},
+          {"NextAction": "play-invalid", "ErrorType": "NoMatchingCondition"},
+          {"NextAction": "disconnect", "ErrorType": "NoMatchingError"}
+        ],
+        "Conditions": [
+          {"NextAction": "play-sales", "Condition": {"Operator": "TextEquals", "Operands": ["1", "sales", "one"]}},
+          {"NextAction": "play-support", "Condition": {"Operator": "TextEquals", "Operands": ["2", "support", "two", "technical"]}},
+          {"NextAction": "play-billing", "Condition": {"Operator": "TextEquals", "Operands": ["3", "billing", "three"]}}
+        ]
+      }
+    },
+    {
+      "Parameters": {
+        "Attribute": {"Key": "department", "Value": "input"}
+      },
+      "Identifier": "check-input",
+      "Type": "UpdateContactAttributes",
+      "Transitions": {"NextAction": "disconnect"}
+    },
+    {
+      "Parameters": {"Text": "Connecting you to our sales team. Please hold."},
+      "Identifier": "play-sales",
+      "Type": "MessageParticipant",
+      "Transitions": {
+        "NextAction": "transfer-queue",
+        "Errors": [{"NextAction": "disconnect", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Parameters": {"Text": "Connecting you to technical support. Please hold."},
+      "Identifier": "play-support",
+      "Type": "MessageParticipant",
+      "Transitions": {
+        "NextAction": "transfer-queue",
+        "Errors": [{"NextAction": "disconnect", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Parameters": {"Text": "Connecting you to our billing department. Please hold."},
+      "Identifier": "play-billing",
+      "Type": "MessageParticipant",
+      "Transitions": {
+        "NextAction": "transfer-queue",
+        "Errors": [{"NextAction": "disconnect", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Parameters": {"Text": "I didn't understand that. Please try again."},
+      "Identifier": "play-invalid",
+      "Type": "MessageParticipant",
+      "Transitions": {
+        "NextAction": "play-menu",
+        "Errors": [{"NextAction": "disconnect", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Parameters": {
+        "QueueId": "{{QUEUE_ARN}}"
+      },
+      "Identifier": "transfer-queue",
+      "Type": "TransferContactToQueue",
+      "Transitions": {
+        "NextAction": "disconnect",
+        "Errors": [{"NextAction": "disconnect", "ErrorType": "NoMatchingError"}]
+      }
+    },
+    {
+      "Parameters": {},
+      "Identifier": "disconnect",
+      "Type": "DisconnectParticipant",
+      "Transitions": {}
+    }
+  ]
+}
