@@ -116,7 +116,34 @@ Language: en (set manually)
 
 The combination creates the model string `aura-2-thalia-en`.
 
-### 5) Render a contact flow JSON from template
+### 5) List Lex V2 bots and STT configuration
+
+```bash
+python3 ~/.copilot/skills/connect-deepgram-setup/scripts/connect_deepgram_setup.py list-bots \
+  --region us-west-2
+```
+
+This shows all Lex V2 bots and their current STT provider configuration.
+
+### 6) Configure Deepgram STT for a Lex V2 bot
+
+```bash
+python3 ~/.copilot/skills/connect-deepgram-setup/scripts/connect_deepgram_setup.py configure-stt \
+  --region us-west-2 \
+  --bot-id YOUR_BOT_ID \
+  --locale-id en_US \
+  --stt-model nova-3-general \
+  --secret-name deepgram \
+  --apply --yes
+```
+
+This command:
+- Updates the bot locale to use Deepgram STT
+- Sets the Nova-3 model for speech recognition
+- Automatically builds the bot locale
+- Shows cost estimates
+
+### 7) Render a contact flow JSON from template
 
 ```bash
 python3 ~/.copilot/skills/connect-deepgram-setup/scripts/connect_deepgram_setup.py flow \
@@ -130,7 +157,7 @@ python3 ~/.copilot/skills/connect-deepgram-setup/scripts/connect_deepgram_setup.
   --greeting-text "Hello! This is Deepgram in Amazon Connect. How can I help?"
 ```
 
-### 6) Deploy the flow via APIs
+### 8) Deploy the flow via APIs
 
 ```bash
 python3 ~/.copilot/skills/connect-deepgram-setup/scripts/connect_deepgram_setup.py deploy \
@@ -184,6 +211,36 @@ Once configured, all contact flows in the instance will use Deepgram for STT.
 | Model format | `eleven_multilingual_v2` | `aura-2-<voice>-<lang>` |
 | API endpoint | api.elevenlabs.io | api.deepgram.com |
 | Secret schema | `apiToken` + `apiTokenRegion` | `apiToken` only |
+
+## Pricing & Cost Estimates
+
+### Deepgram Nova-3 STT (Speech-to-Text)
+
+| Plan | Price per Minute | Price per Hour | Annual Commitment |
+|------|------------------|----------------|-------------------|
+| Pay-As-You-Go | $0.0077 | $0.46 | None |
+| Growth Plan | $0.0065 | $0.39 | $4,000/year |
+
+**Example costs (Pay-As-You-Go):**
+- 1,000 minutes/month: $7.70/month
+- 10,000 minutes/month: $77/month
+- 100,000 minutes/month: $770/month
+
+### Deepgram Aura-2 TTS (Text-to-Speech)
+
+| Plan | Price per 1K Characters |
+|------|------------------------|
+| Pay-As-You-Go | $0.015 |
+| Growth Plan | Contact Deepgram |
+
+### Comparison with AWS Native Services
+
+| Service | Deepgram | AWS Native |
+|---------|----------|------------|
+| STT | $0.0077/min | $0.024/min (Transcribe) |
+| TTS | $0.015/1K chars | $0.016/1K chars (Polly Neural) |
+
+Deepgram Nova-3 STT is ~68% cheaper than Amazon Transcribe with reportedly higher accuracy.
 
 ## References
 

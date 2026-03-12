@@ -826,6 +826,182 @@ def cmd_deploy(args: argparse.Namespace) -> None:
         print(f"Test: call {args.phone_number} and confirm TTS plays with Deepgram voice.")
 
 
+def cmd_configure_stt(args: argparse.Namespace) -> None:
+    """Configure Deepgram STT for an Amazon Lex V2 bot locale."""
+    region = args.region
+    bot_id = args.bot_id
+    locale_id = args.locale_id or "en_US"
+    stt_model = args.stt_model or "nova-3-general"
+    secret_name = args.secret_name
+
+    # Get secret ARN
+    sm = boto3.client("secretsmanager", region_name=region)
+    try:
+        secret = sm.describe_secret(SecretId=secret_name)
+        secret_arn = secret["ARN"]
+    except ClientError as e:
+        if e.response.get("Error", {}).get("Code") == "ResourceNotFoundException":
+            _die(f"Secret '{secret_name}' not found in {region}. Run 'setup' command first.")
+        raise
+
+    print(f"Configuring Deepgram STT for bot {bot_id}, locale {locale_id}")
+    print(f"  STT Model: {stt_model}")
+    print(f"  Secret ARN: {secret_arn}")
+    print("")
+
+    lex = boto3.client("lexv2-models", region_name=region)
+
+    # Get current bot locale settings
+    try:
+        locale = lex.describe_bot_locale(
+            botId=bot_id,
+            botVersion="DRAFT",
+            localeId=locale_id
+        )
+    except ClientError as e:
+        _die(f"Failed to describe bot locale: {e}")
+
+    # Prepare the update
+    update_params = {
+        "botId": bot_id,
+        "botVersion": "DRAFT",
+        "localeId": locale_id,
+        "nluIntentConfidenceThreshold": locale.get("nluIntentConfidenceThreshold", 0.4),
+        "speechRecognitionSettings": {
+            "speechModelPreference": "Deepgram",
+            "speechModelConfig": {
+                "deepgramConfig": {
+                    "apiTokenSecretArn": secret_arn,
+                    "modelId": stt_model
+                }
+            }
+        }
+    }
+
+    # Preserve existing voice settings if present
+    if locale.get("voiceSettings"):
+        update_params["voiceSettings"] = locale["voiceSettings"]
+
+    if not args.apply:
+        print("[dry-run] Would update bot locale with Deepgram STT settings:")
+        print(json.dumps(update_params["speechRecognitionSettings"], indent=2))
+        print("")
+        print("Run with --apply --yes to make changes.")
+        return
+
+    if not args.yes:
+        ans = input("Apply Deepgram STT configuration? [y/N] ").strip().lower()
+        if ans not in {"y", "yes"}:
+            _die("Aborted")
+
+    try:
+        lex.update_bot_locale(**update_params)
+        print("✓ Bot locale updated with Deepgram STT settings")
+    except ClientError as e:
+        _die(f"Failed to update bot locale: {e}")
+
+    # Build the locale
+    print("Building bot locale...")
+    try:
+        lex.build_bot_locale(
+            botId=bot_id,
+            botVersion="DRAFT",
+            localeId=locale_id
+        )
+        print("✓ Bot locale build initiated")
+    except ClientError as e:
+        print(f"Warning: Failed to build bot locale: {e}")
+
+    # Wait for build to complete
+    print("Waiting for build to complete...")
+    for _ in range(30):  # 60 seconds max
+        time.sleep(2)
+        try:
+            status = lex.describe_bot_locale(
+                botId=bot_id,
+                botVersion="DRAFT",
+                localeId=locale_id
+            )
+            build_status = status.get("botLocaleStatus", "")
+            if build_status == "Built":
+                print("✓ Bot locale built successfully")
+                break
+            elif build_status in {"Failed", "Deleting"}:
+                print(f"✗ Build failed with status: {build_status}")
+                if status.get("failureReasons"):
+                    for reason in status["failureReasons"]:
+                        print(f"  - {reason}")
+                break
+            else:
+                print(f"  Status: {build_status}...")
+        except Exception:
+            pass
+    else:
+        print("Build timed out - check AWS Console for status")
+
+    print("")
+    print("Next steps:")
+    print("  1. Verify in AWS Console: Lex > Bots > Your Bot > Locale > Speech model")
+    print("  2. Test with Amazon Connect or Lex Console test feature")
+    print("")
+    print("Cost estimate (Deepgram Nova-3):")
+    print("  Pay-As-You-Go: $0.0077/min ($0.46/hour)")
+    print("  Growth Plan:   $0.0065/min ($0.39/hour) - requires $4K/year commitment")
+
+
+def cmd_list_bots(args: argparse.Namespace) -> None:
+    """List Lex V2 bots and their locales."""
+    region = args.region
+    lex = boto3.client("lexv2-models", region_name=region)
+
+    try:
+        bots = lex.list_bots()
+    except ClientError as e:
+        _die(f"Failed to list bots: {e}")
+
+    bot_list = bots.get("botSummaries", [])
+    if not bot_list:
+        print(f"No Lex V2 bots found in {region}")
+        return
+
+    print(f"Lex V2 Bots in {region}:")
+    print("")
+
+    for bot in bot_list:
+        bot_id = bot.get("botId", "")
+        bot_name = bot.get("botName", "")
+        print(f"  {bot_name} (ID: {bot_id})")
+
+        # Get locales for this bot
+        try:
+            locales = lex.list_bot_locales(botId=bot_id, botVersion="DRAFT")
+            for loc in locales.get("botLocaleSummaries", []):
+                locale_id = loc.get("localeId", "")
+                locale_name = loc.get("localeName", "")
+                status = loc.get("botLocaleStatus", "")
+
+                # Get speech settings
+                try:
+                    locale_detail = lex.describe_bot_locale(
+                        botId=bot_id,
+                        botVersion="DRAFT",
+                        localeId=locale_id
+                    )
+                    speech = locale_detail.get("speechRecognitionSettings", {})
+                    stt_provider = speech.get("speechModelPreference", "Amazon")
+                    if speech.get("speechModelConfig", {}).get("deepgramConfig"):
+                        stt_model = speech["speechModelConfig"]["deepgramConfig"].get("modelId", "")
+                        stt_provider = f"Deepgram ({stt_model})"
+                except Exception:
+                    stt_provider = "Unknown"
+
+                print(f"    └── {locale_id} ({locale_name}) - {status}")
+                print(f"        STT: {stt_provider}")
+        except Exception as e:
+            print(f"    └── (failed to list locales: {e})")
+        print("")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="connect_deepgram_setup.py")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -885,6 +1061,22 @@ def main() -> None:
     pd.add_argument("--phone-number", help="E.164 phone number to associate (e.g., +18445551212)")
     pd.add_argument("--phone-number-id", help="Phone number id to associate")
     pd.set_defaults(func=cmd_deploy)
+
+    # List bots command
+    pl = sub.add_parser("list-bots", help="List Lex V2 bots and their STT configuration")
+    pl.add_argument("--region", required=True)
+    pl.set_defaults(func=cmd_list_bots)
+
+    # Configure STT command
+    pcs = sub.add_parser("configure-stt", help="Configure Deepgram STT for an Amazon Lex V2 bot locale")
+    pcs.add_argument("--region", required=True)
+    pcs.add_argument("--bot-id", required=True, help="Lex V2 bot ID")
+    pcs.add_argument("--locale-id", default="en_US", help="Locale ID (default: en_US)")
+    pcs.add_argument("--stt-model", default="nova-3-general", help="Deepgram STT model (default: nova-3-general)")
+    pcs.add_argument("--secret-name", default="deepgram", help="Secrets Manager secret name")
+    pcs.add_argument("--apply", action="store_true", help="Actually make changes")
+    pcs.add_argument("--yes", action="store_true", help="Skip confirmation prompts")
+    pcs.set_defaults(func=cmd_configure_stt)
 
     args = p.parse_args()
     args.func(args)
