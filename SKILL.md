@@ -1,6 +1,6 @@
 ---
 name: connect-deepgram-setup
-description: "Bootstrap Amazon Connect + Deepgram TTS/STT: create/update Secrets Manager secret, apply secret+KMS policies safely, and list valid Deepgram model IDs + voice IDs."
+description: "Bootstrap Amazon Connect + Deepgram TTS/STT: create/update Secrets Manager secret, apply secret+KMS policies safely, configure Lex bots for Deepgram STT, and deploy contact flows with Deepgram TTS."
 user-invocable: true
 disable-model-invocation: false
 ---
@@ -12,13 +12,15 @@ Use this skill to reliably configure Deepgram as a third-party TTS and STT provi
 - KMS decrypt denied (`Access to KMS is not allowed`)
 - Secret schema mismatch (`secret could not be deserialized`)
 - Wrong model string (must use exact Deepgram model names)
+- Contact flow creation errors (wrong action types)
 
 ## What this skill does
 
 1. **Secrets Manager**: create/update the Deepgram credential secret in the **required JSON schema**.
-2. **Secret resource policy**: allow `connect.amazonaws.com` to call `secretsmanager:GetSecretValue` scoped to your instance.
-3. **KMS key policy**: allow Connect + Secrets Manager to decrypt **only** for that secret using `kms:EncryptionContext:SecretARN`.
+2. **Secret resource policy**: allow **both** `connect.amazonaws.com` AND `lex.amazonaws.com` to call `secretsmanager:GetSecretValue` (required for TTS+STT).
+3. **KMS key policy**: allow Connect + Lex + Secrets Manager to decrypt **only** for that secret using `kms:EncryptionContext:SecretARN`.
 4. **Catalog**: list valid Deepgram **STT models** (Nova-3), **TTS models** (Aura-2), and **voice IDs**.
+5. **Contact Flows**: create flows with proper action types for Lex bot integration (`ConnectParticipantWithLexBot`).
 
 ## Safety rules (important)
 
@@ -116,6 +118,18 @@ Language: en (set manually)
 
 The combination creates the model string `aura-2-thalia-en`.
 
+**Via API (Contact Flow JSON):**
+```json
+{
+  "Type": "UpdateContactTextToSpeechVoice",
+  "Parameters": {
+    "TextToSpeechEngine": "deepgram:aura-2",
+    "TextToSpeechVoice": "thalia",
+    "ExternalCredentialSecretARN": "arn:aws:secretsmanager:us-west-2:ACCOUNT:secret:deepgram-XXXXX"
+  }
+}
+```
+
 ### 5) List Lex V2 bots and STT configuration
 
 ```bash
@@ -190,16 +204,120 @@ The secret must contain JSON with these keys:
 }
 ```
 
-## Instance-Level STT Configuration
+## Secret Resource Policy (Critical!)
 
-For Speech-to-Text, Deepgram is configured at the **instance level** (not per-flow):
+The secret resource policy must allow **BOTH** services:
 
-1. Go to Amazon Connect Console → Your Instance → Third-party integrations
-2. Select Deepgram as the speech provider
-3. Enter the Secrets Manager ARN
-4. Select the STT model (e.g., `nova-3-general`)
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowAmazonConnectGetSecretValue",
+      "Effect": "Allow",
+      "Principal": {"Service": "connect.amazonaws.com"},
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {"aws:sourceAccount": "YOUR_ACCOUNT_ID"},
+        "ArnLike": {"aws:sourceArn": "arn:aws:connect:REGION:ACCOUNT:instance/INSTANCE_ID"}
+      }
+    },
+    {
+      "Sid": "AllowLexGetSecretValue",
+      "Effect": "Allow",
+      "Principal": {"Service": "lex.amazonaws.com"},
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {"aws:SourceAccount": "YOUR_ACCOUNT_ID"},
+        "ArnLike": {"aws:SourceArn": "arn:aws:lex:REGION:ACCOUNT:bot-alias/*/*"}
+      }
+    }
+  ]
+}
+```
 
-Once configured, all contact flows in the instance will use Deepgram for STT.
+**Why both?**
+- `connect.amazonaws.com` - Required for TTS in contact flows
+- `lex.amazonaws.com` - Required for STT via Lex bots
+
+## Contact Flow Action Types (Important!)
+
+When creating contact flows via API, use the correct action types:
+
+| Use Case | Action Type | Notes |
+|----------|-------------|-------|
+| Set TTS voice | `UpdateContactTextToSpeechVoice` | Sets Deepgram TTS |
+| Play prompt | `MessageParticipant` | Uses current TTS voice |
+| DTMF input | `GetParticipantInput` | For keypress only |
+| **Lex bot input** | `ConnectParticipantWithLexBot` | **For speech/STT** |
+
+**Common mistake:** Using `GetParticipantInput` with `LexV2Bot` will fail. Use `ConnectParticipantWithLexBot` instead.
+
+**Example flow action for Lex STT:**
+```json
+{
+  "Identifier": "get-speech",
+  "Type": "ConnectParticipantWithLexBot",
+  "Parameters": {
+    "Text": "How can I help you today?",
+    "LexV2Bot": {
+      "AliasArn": "arn:aws:lex:us-west-2:ACCOUNT:bot-alias/BOT_ID/ALIAS_ID"
+    }
+  },
+  "Transitions": {
+    "NextAction": "success",
+    "Errors": [
+      {"NextAction": "no-input", "ErrorType": "NoMatchingCondition"},
+      {"NextAction": "no-input", "ErrorType": "InputTimeLimitExceeded"},
+      {"NextAction": "error", "ErrorType": "NoMatchingError"}
+    ]
+  }
+}
+```
+
+## Lex Bot STT Configuration
+
+For Speech-to-Text, Deepgram is configured at the **Lex bot locale level**:
+
+1. Go to Amazon Lex Console → Your Bot → Languages → en_US
+2. Under "Advanced configuration", find "Speech model preference"
+3. Select **Deepgram** and choose model (e.g., `nova-3-general`)
+4. Build the bot locale
+
+**Via CLI:**
+```bash
+python3 ~/.copilot/skills/connect-deepgram-setup/scripts/connect_deepgram_setup.py configure-stt \
+  --region us-west-2 \
+  --bot-id YOUR_BOT_ID \
+  --locale-id en_US \
+  --stt-model nova-3-general \
+  --secret-name deepgram \
+  --apply --yes
+```
+
+**Note:** The Lex test console may show "Connect Unlimited AI not onboarded" error, but **runtime calls work correctly**. Test via actual phone calls.
+
+## CloudWatch Log Evidence
+
+When Deepgram is working, CloudWatch logs (`/aws/connect/<instance>`) show:
+
+```json
+{
+  "ContactFlowModuleType": "GetUserInput",
+  "Parameters": {
+    "Engine": "deepgram:aura-2",
+    "Voice": "thalia",
+    "BotAliasArn": "arn:aws:lex:..."
+  },
+  "Results": "Fallbackintent"
+}
+```
+
+Key evidence:
+- `Engine: deepgram:aura-2` - Proves Deepgram TTS
+- `Results: <intent>` - Proves STT transcription worked
 
 ## Differences from ElevenLabs
 
@@ -242,10 +360,60 @@ Once configured, all contact flows in the instance will use Deepgram for STT.
 
 Deepgram Nova-3 STT is ~68% cheaper than Amazon Transcribe with reportedly higher accuracy.
 
+## Troubleshooting
+
+### "Connect Unlimited AI not onboarded" Error
+
+**Symptom:** Lex test console shows this error when testing STT.
+
+**Solution:** This is a console-specific issue. The runtime works correctly. Test by:
+1. Creating a contact flow with `ConnectParticipantWithLexBot` action
+2. Associating a phone number
+3. Calling the phone number and speaking
+
+### Contact Flow Creation Fails with InvalidContactFlowException
+
+**Symptom:** API returns `InvalidContactFlowException` with no details.
+
+**Common causes:**
+1. Using `GetParticipantInput` with `LexV2Bot` - Use `ConnectParticipantWithLexBot` instead
+2. Missing `ExternalCredentialSecretARN` in TTS voice action
+3. Wrong `TextToSpeechEngine` format - must be `deepgram:aura-2`
+
+### TTS Works but STT Doesn't
+
+**Check:**
+1. Secret policy includes `lex.amazonaws.com` principal
+2. Lex bot locale has Deepgram speech model configured
+3. Lex bot is associated with Connect instance
+4. Bot alias is built (not just draft)
+
+### CloudWatch Shows No Deepgram Evidence
+
+**Check:**
+1. Flow logging is enabled (`UpdateFlowLoggingBehavior` action)
+2. Look in `/aws/connect/<instance-name>` log group
+3. Filter for `deepgram` or `Engine`
+
+## Proven Working Configuration
+
+Tested and verified on 2026-03-12:
+
+- **Instance:** maximus-gov-ccaas-in-a-box-1
+- **Region:** us-west-2
+- **TTS Engine:** `deepgram:aura-2`
+- **TTS Voice:** `thalia`
+- **STT Model:** `nova-3-general`
+- **Lex Bot:** QnaBot with Deepgram speech model
+- **Phone:** +1-844-593-5770
+
 ## References
 
 - AWS: Configure third-party speech providers
   https://docs.aws.amazon.com/connect/latest/adminguide/configure-third-party-speech-providers.html
+
+- AWS: Third-party STT in Amazon Connect
+  https://docs.aws.amazon.com/connect/latest/adminguide/configure-third-party-stt.html
 
 - Deepgram + Amazon Connect Integration
   https://developers.deepgram.com/docs/deepgram-with-amazon-connect
@@ -258,3 +426,6 @@ Deepgram Nova-3 STT is ~68% cheaper than Amazon Transcribe with reportedly highe
 
 - Amazon Lex: Setting up Deepgram speech model
   https://docs.aws.amazon.com/lexv2/latest/dg/customizing-speech-deepgram-setup.html
+
+- Connect Flow Language: ConnectParticipantWithLexBot
+  https://docs.aws.amazon.com/connect/latest/APIReference/participant-actions-connectparticipantwithlexbot.html

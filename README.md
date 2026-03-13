@@ -366,13 +366,14 @@ See [SKILL.md](SKILL.md) for complete skill documentation.
 
 ### Secret Resource Policy
 
-The setup script applies this resource policy to your secret:
+The setup script applies this resource policy to your secret. **Both services are required:**
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
+      "Sid": "AllowConnectGetSecretValue",
       "Effect": "Allow",
       "Principal": {
         "Service": "connect.amazonaws.com"
@@ -380,14 +381,32 @@ The setup script applies this resource policy to your secret:
       "Action": "secretsmanager:GetSecretValue",
       "Resource": "*",
       "Condition": {
+        "StringEquals": {"aws:sourceAccount": "<account-id>"},
         "ArnLike": {
           "aws:SourceArn": "arn:aws:connect:<region>:<account>:instance/<instance-id>"
+        }
+      }
+    },
+    {
+      "Sid": "AllowLexGetSecretValue",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "lex.amazonaws.com"
+      },
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {"aws:SourceAccount": "<account-id>"},
+        "ArnLike": {
+          "aws:SourceArn": "arn:aws:lex:<region>:<account>:bot-alias/*/*"
         }
       }
     }
   ]
 }
 ```
+
+> **⚠️ Important:** The `lex.amazonaws.com` principal is required for STT to work via Lex bots. Without it, TTS will work but STT will fail.
 
 ### KMS Key Policy
 
@@ -502,6 +521,53 @@ aws secretsmanager put-secret-value \
 - Voice: `thalia` (just the name, no prefix)
 </details>
 
+<details>
+<summary><b>Error: "Connect Unlimited AI not onboarded" in Lex Console</b></summary>
+
+**Cause:** This is a Lex test console-specific error. **Runtime calls work correctly.**
+
+**Fix:** Don't test via Lex console. Instead:
+1. Create a contact flow with `ConnectParticipantWithLexBot` action
+2. Associate a phone number
+3. Call the number to test STT in production
+
+This error does NOT affect real calls through Connect.
+</details>
+
+<details>
+<summary><b>Error: "InvalidContactFlowException" when creating flow via API</b></summary>
+
+**Cause:** Using wrong action type for Lex bot integration.
+
+**Fix:** Use `ConnectParticipantWithLexBot` instead of `GetParticipantInput` for speech/STT:
+
+```json
+{
+  "Type": "ConnectParticipantWithLexBot",
+  "Parameters": {
+    "Text": "How can I help you?",
+    "LexV2Bot": {
+      "AliasArn": "arn:aws:lex:us-west-2:ACCOUNT:bot-alias/BOT_ID/ALIAS_ID"
+    }
+  }
+}
+```
+
+**Note:** `GetParticipantInput` is for DTMF (keypress) only. For speech recognition with Lex bots, always use `ConnectParticipantWithLexBot`.
+</details>
+
+<details>
+<summary><b>TTS works but STT doesn't</b></summary>
+
+**Cause:** Secret policy missing `lex.amazonaws.com` principal.
+
+**Fix:** Update secret resource policy to include both services:
+- `connect.amazonaws.com` - for TTS
+- `lex.amazonaws.com` - for STT via Lex
+
+Run the setup command again to fix the policy.
+</details>
+
 ### Debug Logging
 
 Enable CloudWatch logging in your contact flow:
@@ -514,6 +580,41 @@ Enable CloudWatch logging in your contact flow:
 ```
 
 View logs: **CloudWatch → Log groups → /aws/connect/<instance-name>**
+
+When Deepgram is working correctly, you'll see log entries like:
+
+```json
+{
+  "ContactFlowModuleType": "GetUserInput",
+  "Parameters": {
+    "Engine": "deepgram:aura-2",
+    "Voice": "thalia",
+    "BotAliasArn": "arn:aws:lex:..."
+  },
+  "Results": "Fallbackintent"
+}
+```
+
+**Key evidence:**
+- `Engine: deepgram:aura-2` - Confirms Deepgram TTS is active
+- `Results: <intent>` - Confirms STT transcribed speech and Lex matched an intent
+
+---
+
+## ✅ Verified Working Configuration
+
+This integration was tested and verified on **2026-03-12**:
+
+| Component | Value |
+|-----------|-------|
+| Region | us-west-2 |
+| TTS Engine | `deepgram:aura-2` |
+| TTS Voice | `thalia` |
+| STT Model | `nova-3-general` |
+| Lex Bot | QnaBot with Deepgram speech model |
+| Test Phone | +1-844-593-5770 |
+
+CloudWatch logs confirmed `Engine: deepgram:aura-2` and successful intent recognition.
 
 ---
 
