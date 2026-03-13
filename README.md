@@ -663,3 +663,26 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
   <b>Built with ❤️ for the contact center community</b><br>
   <sub>Questions? Open an issue or reach out!</sub>
 </p>
+
+<!-- BEGIN COPILOT CUSTOM AGENTS -->
+## GitHub Copilot Custom Agents (Maximus Internal)
+
+This repository includes **GitHub Copilot custom agent profiles** under `.github/agents/` to speed up planning, documentation, and safe reviews.
+
+### Included agents
+- `implementation-planner` — Creates detailed implementation plans and technical specifications for this repository.
+- `readme-creator` — Improves README and adjacent documentation without modifying production code.
+- `security-auditor` — Performs a read-only security review (secrets risk, risky patterns) and recommends fixes.
+- `amazon-connect-solution-engineer` — Designs and integrates Amazon Connect solutions for this repository (IAM-safe, CX/ops focused).
+
+### How to invoke
+
+- **GitHub.com (Copilot coding agent):** select the agent from the agent dropdown (or assign it to an issue) after the `.agent.md` files are on the default branch.
+- **GitHub Copilot CLI:** from the repo folder, run `/agent` and select one of the agents, or run:
+  - `copilot --agent <agent-file-base-name> --prompt "<your prompt>"`
+- **IDEs:** open Copilot Chat and choose the agent from the agents dropdown (supported IDEs), backed by the `.github/agents/*.agent.md` files.
+
+References:
+- Custom agents configuration: https://docs.github.com/en/copilot/reference/custom-agents-configuration
+- Creating custom agents: https://docs.github.com/en/copilot/how-tos/use-copilot-agents/coding-agent/create-custom-agents
+<!-- END COPILOT CUSTOM AGENTS -->
